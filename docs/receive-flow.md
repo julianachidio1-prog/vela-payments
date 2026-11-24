@@ -43,6 +43,8 @@ polling).
 | `src/features/wallet/services/TrustlineService.ts` | Checks whether the receiver has a USDC trustline before a USDC request is broadcast (CLI-070) |
 | `src/features/receive/hooks/useReceivePayment.ts` | FSM orchestrator + `ReceivePaymentProvider`/`useReceivePaymentContext` for cross-screen state (CLI-065) |
 | `src/features/receive/views/ReceiveHomeView.tsx` | Amount entry, asset selector, kicks off `prepare()` (CLI-061) |
+| `src/features/receive/hooks/useReceiveHistorySummary.ts` | Loads the received-payment summary for the history link and derives its loading/empty/error/ready state |
+| `src/features/receive/components/ReceiveHistoryLink.tsx` | History link card on the receive home screen (see [section 6](#6-receive-history-link)) |
 | `src/features/receive/views/ReceiveListeningView.tsx` | Starts the NFC broadcast, shows countdown + NFC status (CLI-064) |
 | `src/features/receive/views/WaitingForPaymentView.tsx` | Waits for payment settlement, 60s timeout (CLI-066) |
 | `src/features/receive/views/ReceiveSuccessView.tsx` | Success summary, reset/home actions (CLI-067) |
@@ -101,7 +103,48 @@ PII**. Amounts are bucketed via `amount_bucket`: `'<1' | '1-10' | '10-100' | '>1
 | any → `failed` (`confirmFailure(reason)`) | `RECEIVE_FAILED` | `amount_bucket`, `asset`, `reason` |
 | any → `cancelled` (`cancel()`) | `RECEIVE_CANCELLED` | `amount_bucket`, `asset` |
 
-## 6. Related docs
+## 6. Receive history link
+
+`ReceiveHomeView` ends with a "Received payments" card that links to the
+History tab. It reads the same Horizon-backed `HistoryService.list()` the
+History tab uses, keeps only `direction === 'received'` rows, and renders one
+of these states:
+
+| State | When | What the user sees |
+| --- | --- | --- |
+| `unavailable` | No wallet public key yet | Nothing; the card is hidden |
+| `loading` | First lookup for the active wallet, or after "Try Again" | Spinner + "Checking Stellar for recent payments…" |
+| `empty` | Lookup succeeded with no received payments | "No received payments in your recent Stellar activity yet…" |
+| `error` | Horizon request failed | Error text + "Try Again" |
+| `ready` | At least one received payment | Count in recent activity + latest amount, asset and time |
+
+"View History" is available in every visible state and opens the History tab.
+
+Behavior notes:
+
+- The summary refreshes whenever the receive tab regains focus, so finishing a
+  receive flow and returning picks up the settled payment. Focus refreshes keep
+  the previous summary on screen instead of flashing the loading state.
+- Responses are tagged with the wallet they were requested for, and only the
+  latest request may update state, so a late response never shows another
+  wallet's payments.
+- Horizon returns the latest page of payment operations (sent and received,
+  newest first, currently 50), so the count is "in recent activity", not an
+  all-time total. A wallet whose latest page is all outgoing payments shows the
+  empty state.
+- Issued assets from an unexpected issuer keep the History tab's
+  `(unverified issuer)` label and are highlighted in the error color.
+- Errors are not logged; Horizon errors can echo the account id.
+- This is a read-only Horizon lookup. It does not call the Vela server and does
+  not change any request, payment or NFC contract.
+
+Unit tests (`src/features/receive/__tests__/useReceiveHistorySummary.test.ts`,
+`src/features/receive/__tests__/ReceiveHistoryLink.test.tsx`) mock
+`HistoryService` and cover every state, retry, and stale-response handling. They
+do not hit Horizon; checking the card against a real testnet payment is a
+manual step on a device or the web build.
+
+## 7. Related docs
 
 - [NFC library ADR](adr-nfc-library.md) — payload size/encoding constraints the
   payment request payload must respect.

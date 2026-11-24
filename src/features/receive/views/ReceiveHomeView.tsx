@@ -11,6 +11,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Button, Screen, TextInput } from '@/components/ui';
 import { AnalyticsEvents } from '@/constants/analytics-events';
 import { Spacing } from '@/constants/theme';
+import { ReceiveHistoryLink } from '@/features/receive/components/ReceiveHistoryLink';
 import { receiveAmountSchema } from '@/features/receive/schemas/receiveAmount';
 import { useReceivePaymentContext } from '@/features/receive/hooks/useReceivePayment';
 import {
@@ -138,6 +139,8 @@ export const ReceiveHomeView = () => {
         loading={submitting}
         style={styles.submit}
       />
+
+      <ReceiveHistoryLink />
     </Screen>
   );
 };
