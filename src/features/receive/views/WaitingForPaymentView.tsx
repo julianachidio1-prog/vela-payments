@@ -15,6 +15,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Button, LoadingSpinner, Screen } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
 import { useReceivePaymentContext } from '@/features/receive/hooks/useReceivePayment';
+import { ReceiveFailureCode } from '@/features/receive/services/receiveFailure';
 import { receiveSession } from '@/features/receive/services/receiveSession';
 import { useOptionalAuth } from '@/features/auth/hooks/useAuth';
 import { PaymentApiClient } from '@/features/payments/services/PaymentApiClient';
@@ -44,7 +45,7 @@ export const WaitingForPaymentView = () => {
     timeoutStartedRef.current = true;
 
     const cancelTimeout = receiveSession.startWaitTimeout(WAIT_TIMEOUT_MS, () => {
-      confirmFailure('timeout');
+      confirmFailure(ReceiveFailureCode.TIMEOUT);
     });
 
     return cancelTimeout;
@@ -62,13 +63,13 @@ export const WaitingForPaymentView = () => {
         if (stopped) return;
         const expectedNetwork = env.stellarNetwork === 'testnet' ? 'TESTNET' : 'MAINNET';
         if (request.network !== expectedNetwork) {
-          confirmFailure(`Payment request belongs to ${request.network}, not ${expectedNetwork}.`);
+          confirmFailure(ReceiveFailureCode.NETWORK_MISMATCH);
           return;
         }
         if (request.paymentStatus === 'CONFIRMED') {
           confirmSuccess(request.stellarTxHash ?? undefined);
         } else if (request.paymentStatus === 'FAILED') {
-          confirmFailure('Payment failed on Stellar.');
+          confirmFailure(ReceiveFailureCode.PAYMENT_FAILED);
         }
       } catch {
         // A transient API failure should not end the receive session; the wait timeout remains authoritative.

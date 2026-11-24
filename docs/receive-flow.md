@@ -39,6 +39,7 @@ polling).
 | --- | --- |
 | `src/features/receive/schemas/receiveAmount.ts` | Zod validation for the amount + asset pair (CLI-062) |
 | `src/features/receive/services/PaymentRequestBuilder.ts` | Builds a `PaymentRequest` via the shared `createPaymentRequest` (CLI-063) |
+| `src/features/receive/services/receiveFailure.ts` | Closed set of failure codes, user-safe messages, and the mapping from raw errors to codes |
 | `src/features/receive/services/receiveSession.ts` | Owns the request-expiry and wait-timeout timers, cancellable and ghost-free (CLI-069) |
 | `src/features/wallet/services/TrustlineService.ts` | Checks whether the receiver has a USDC trustline before a USDC request is broadcast (CLI-070) |
 | `src/features/receive/hooks/useReceivePayment.ts` | FSM orchestrator + `ReceivePaymentProvider`/`useReceivePaymentContext` for cross-screen state (CLI-065) |
@@ -75,12 +76,32 @@ outlives its screen.
 
 ## 4. Error matrix
 
-| Error code | Screen shown | User message | Recovery action |
+Failure details are normalized before they are stored or shown. Raw error text
+(Vela API messages, Horizon errors, fetch errors, network names) can contain
+server internals or identifiers, so `useReceivePayment` only keeps a closed
+`ReceiveFailureCode` (`src/features/receive/services/receiveFailure.ts`) in its
+`error` field, and `ReceiveFailedView` only renders the fixed copy for that
+code. Anything not explicitly mapped becomes `unknown`.
+
+| Error code | Source | User message | Recovery action |
 | --- | --- | --- | --- |
-| `timeout` | `ReceiveFailedView` | "Payment timed out. Please try again." | Try Again (same amount) or Change Amount |
-| `nfc_error` | `ReceiveFailedView` | "NFC connection was lost." | Try Again (same amount) or Change Amount |
-| `trustline_missing` | `ReceiveFailedView` | "USDC trustline not found. Set up your USDC account first." | Try Again (same amount) or Change Amount |
-| *(anything else)* | `ReceiveFailedView` | "Payment failed. Please try again." | Try Again (same amount) or Change Amount |
+| `timeout` | 60s wait timeout in `WaitingForPaymentView` | "Payment timed out. Please try again." | Try Again (same amount) or Change Amount |
+| `nfc_error` | NFC writer reports `error` | "NFC connection was lost." | Try Again (same amount) or Change Amount |
+| `trustline_missing` | USDC trustline check in `prepare()` | "USDC trustline not found. Set up your USDC account first." | Try Again (same amount) or Change Amount |
+| `network_mismatch` | Server reports a different Stellar network (on registration or while polling) | "This request does not match the Stellar network Vela is using. Start a new request." | Try Again (same amount) or Change Amount |
+| `request_registration_failed` | Vela API rejects `createPaymentRequest` (`PaymentApiError`) | "Vela could not register this payment request. Check your connection and try again." | Try Again (same amount) or Change Amount |
+| `payment_failed` | Server reports the payment as `FAILED` while polling | "The payment could not be completed on Stellar. Ask the payer to try again." | Try Again (same amount) or Change Amount |
+| `unknown` | Anything else, including free-text reasons passed to `confirmFailure` | "Payment failed. Please try again." | Try Again (same amount) or Change Amount |
+
+`confirmFailure(reason: string)` keeps its signature, but callers should pass a
+`ReceiveFailureCode` value; other strings are stored and reported as `unknown`.
+`prepare()` still rethrows the original error to its caller so it can be
+inspected while debugging, but that error is never rendered. Every screen in
+the table is `ReceiveFailedView`.
+
+To add a new failure: add a code and message in `receiveFailure.ts`, map its
+source in `toReceiveFailureCode` (or throw a `ReceiveFailureError` with that
+code), and add a row here.
 
 "Try Again" preserves the previously entered amount/asset by forwarding them as
 route params back to `ReceiveHomeView`; "Change Amount" resets fully and
@@ -98,7 +119,7 @@ PII**. Amounts are bucketed via `amount_bucket`: `'<1' | '1-10' | '10-100' | '>1
 | `preparing` → `broadcasting` (`startBroadcast()`) | `RECEIVE_BROADCAST` | `amount_bucket`, `asset` |
 | `broadcasting` → `waiting` (NFC write succeeded) | `RECEIVE_WAITING` | `amount_bucket`, `asset` |
 | `waiting`/`broadcasting` → `success` (`confirmSuccess()`) | `RECEIVE_COMPLETED` | `amount_bucket`, `asset` |
-| any → `failed` (`confirmFailure(reason)`) | `RECEIVE_FAILED` | `amount_bucket`, `asset`, `reason` |
+| any → `failed` (`confirmFailure(reason)`) | `RECEIVE_FAILED` | `amount_bucket`, `asset`, `reason` (a `ReceiveFailureCode`, never raw error text) |
 | any → `cancelled` (`cancel()`) | `RECEIVE_CANCELLED` | `amount_bucket`, `asset` |
 
 ## 6. Related docs

@@ -27,6 +27,12 @@ import { AnalyticsEvents, type AmountBucket } from '@/constants/analytics-events
 import { useNfcWriter } from '@/features/nfc/hooks/useNfcWriter';
 import type { PaymentRequest } from '@/features/nfc/schemas/paymentRequest';
 import { paymentRequestBuilder } from '@/features/receive/services/PaymentRequestBuilder';
+import {
+  ReceiveFailureCode,
+  ReceiveFailureError,
+  type ReceiveFailureCodeValue,
+  toReceiveFailureCode,
+} from '@/features/receive/services/receiveFailure';
 import { receiveSession } from '@/features/receive/services/receiveSession';
 import { trustlineService } from '@/features/wallet/services/TrustlineService';
 import type { SupportedAssetCode } from '@/features/wallet/constants/assets';
@@ -47,13 +53,21 @@ export type ReceiveState =
 export interface UseReceivePaymentResult {
   state: ReceiveState;
   paymentRequest: PaymentRequest | null;
-  error: string | null;
+  /**
+   * Normalized failure code (see `receiveFailure.ts`). Never raw error text,
+   * so it is safe to map to UI copy and to analytics.
+   */
+  error: ReceiveFailureCodeValue | null;
   txHash: string | null;
   nfcStatus: ReturnType<typeof useNfcWriter>['status'];
   prepare: (amount: string, asset: SupportedAssetCode, recipientPublicKey: string) => Promise<void>;
   startBroadcast: () => Promise<void>;
   cancel: () => Promise<void>;
   confirmSuccess: (txHash?: string) => void;
+  /**
+   * Moves the flow to `failed`. `reason` should be a `ReceiveFailureCode`;
+   * any other string is stored and reported as `unknown`.
+   */
   confirmFailure: (reason: string) => void;
   reset: () => void;
 }
@@ -73,7 +87,7 @@ export function useReceivePayment(): UseReceivePaymentResult {
   // an Effect (see https://react.dev/learn/you-might-not-need-an-effect).
   const [phase, setPhase] = useState<Exclude<ReceiveState, 'waiting'>>('idle');
   const [paymentRequest, setPaymentRequest] = useState<PaymentRequest | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ReceiveFailureCodeValue | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const auth = useOptionalAuth();
   const sessionToken = auth?.state.sessionToken ?? null;
@@ -99,15 +113,16 @@ export function useReceivePayment(): UseReceivePaymentResult {
 
   const confirmFailure = useCallback(
     (reason: string) => {
+      const code = toReceiveFailureCode(reason);
       cancelExpiryTimer();
-      setError(reason);
+      setError(code);
       setPhase('failed');
       trackEvent(AnalyticsEvents.RECEIVE_FAILED, {
         amount_bucket: paymentRequest
           ? amountBucket(paymentRequest.amount)
           : ('<1' as AmountBucket),
         asset: assetRef.current,
-        reason,
+        reason: code,
       });
     },
     [cancelExpiryTimer, paymentRequest]
@@ -154,7 +169,7 @@ export function useReceivePayment(): UseReceivePaymentResult {
         if (asset === 'USDC') {
           const { hasLine } = await trustlineService.checkUsdcTrustline(recipientPublicKey);
           if (!hasLine) {
-            throw new Error('trustline_missing');
+            throw new ReceiveFailureError(ReceiveFailureCode.TRUSTLINE_MISSING);
           }
         }
 
@@ -168,14 +183,18 @@ export function useReceivePayment(): UseReceivePaymentResult {
           });
           const expectedNetwork = env.stellarNetwork === 'testnet' ? 'TESTNET' : 'MAINNET';
           if (persisted.network !== expectedNetwork) {
-            throw new Error(`Server network mismatch: expected ${expectedNetwork}.`);
+            throw new ReceiveFailureError(
+              ReceiveFailureCode.NETWORK_MISMATCH,
+              `Server network mismatch: expected ${expectedNetwork}.`
+            );
           }
         }
         setPaymentRequest(request);
         setPhase('preparing');
       } catch (err) {
-        const reason = err instanceof Error ? err.message : 'unknown';
-        confirmFailure(reason);
+        // The raw error is rethrown for the caller, but only its category is
+        // kept in state and analytics: API messages can carry server detail.
+        confirmFailure(toReceiveFailureCode(err));
         throw err;
       }
     },

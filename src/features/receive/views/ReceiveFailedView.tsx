@@ -10,20 +10,14 @@ import { ThemedText } from '@/components/themed-text';
 import { Button, Screen } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
 import { useReceivePaymentContext } from '@/features/receive/hooks/useReceivePayment';
-
-const ERROR_MESSAGES: Record<string, string> = {
-  timeout: 'Payment timed out. Please try again.',
-  nfc_error: 'NFC connection was lost.',
-  trustline_missing: 'USDC trustline not found. Set up your USDC account first.',
-};
-
-const DEFAULT_MESSAGE = 'Payment failed. Please try again.';
+import { getReceiveFailureMessage } from '@/features/receive/services/receiveFailure';
 
 export const ReceiveFailedView = () => {
   const router = useRouter();
   const { error, paymentRequest, reset } = useReceivePaymentContext();
 
-  const message = (error && ERROR_MESSAGES[error]) ?? DEFAULT_MESSAGE;
+  // Only fixed copy is rendered; the stored reason is never displayed as-is.
+  const message = getReceiveFailureMessage(error);
 
   const handleTryAgain = () => {
     const amount = paymentRequest?.amount;

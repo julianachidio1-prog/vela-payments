@@ -12,6 +12,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Button, Screen } from '@/components/ui';
 import { Spacing } from '@/constants/theme';
 import { useReceivePaymentContext } from '@/features/receive/hooks/useReceivePayment';
+import { ReceiveFailureCode } from '@/features/receive/services/receiveFailure';
 
 const NFC_STATUS_LABELS: Record<string, string> = {
   idle: 'Preparing…',
@@ -66,7 +67,7 @@ export const ReceiveListeningView = () => {
 
   useEffect(() => {
     if (nfcStatus === 'error') {
-      confirmFailure('nfc_error');
+      confirmFailure(ReceiveFailureCode.NFC_ERROR);
     }
   }, [nfcStatus, confirmFailure]);
 
