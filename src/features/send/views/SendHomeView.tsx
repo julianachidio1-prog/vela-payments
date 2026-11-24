@@ -11,6 +11,12 @@ import {
   PaymentApiClient,
 } from '@/features/payments/services/PaymentApiClient';
 import type { PaymentResponse } from '@/features/payments/services/PaymentApiClient';
+import { TransactionSummaryCard } from '@/features/send/components/TransactionSummaryCard';
+import {
+  assertSigningMatchesSummary,
+  buildPaymentTransactionSummary,
+} from '@/features/send/services/paymentTransactionSummary';
+import type { PaymentTransactionSummary } from '@/features/send/services/paymentTransactionSummary';
 import { useWallet } from '@/features/wallet/hooks/useWallet';
 import { AccountService } from '@/features/wallet/services/AccountService';
 import { BalanceService } from '@/features/wallet/services/BalanceService';
@@ -18,7 +24,17 @@ import { trustlineService } from '@/features/wallet/services/TrustlineService';
 import { env } from '@/lib/env';
 import { stellarTransactionUrl } from '@/lib/stellarExplorer';
 
-type SendState = 'idle' | 'scanning' | 'review' | 'processing' | 'success' | 'error';
+type SendState =
+  | 'idle'
+  | 'scanning'
+  | 'review'
+  | 'preparing'
+  | 'confirm'
+  | 'processing'
+  | 'success'
+  | 'error';
+
+const MISSING_ACCOUNT_MESSAGE = 'Connect your Vela account and wallet before sending a payment.';
 
 export const SendHomeView = () => {
   const { state: authState } = useAuth();
@@ -28,6 +44,7 @@ export const SendHomeView = () => {
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [intent, setIntent] = useState<PaymentResponse | null>(null);
+  const [summary, setSummary] = useState<PaymentTransactionSummary | null>(null);
 
   useEffect(() => {
     // NFC callbacks update the workflow state after a scan completes.
@@ -46,19 +63,22 @@ export const SendHomeView = () => {
   const handleScan = useCallback(async () => {
     setError(null);
     setIntent(null);
+    setSummary(null);
     setTxHash(null);
     setState('scanning');
     await startReading();
   }, [startReading]);
 
-  const handlePay = useCallback(async () => {
+  // Step 1: obtain the unsigned intent, validate it against the request and
+  // decode it into a summary. Nothing is authorized or signed here.
+  const handleReview = useCallback(async () => {
     if (!lastRequest?.requestId || !publicKey || !authState.sessionToken) {
-      setError('Connect your Vela account and wallet before sending a payment.');
+      setError(MISSING_ACCOUNT_MESSAGE);
       setState('error');
       return;
     }
 
-    setState('processing');
+    setState('preparing');
     setError(null);
     try {
       let currentIntent = intent;
@@ -82,6 +102,31 @@ export const SendHomeView = () => {
         amount: currentIntent.amount,
         memo: currentIntent.memo,
       });
+
+      setSummary(
+        buildPaymentTransactionSummary(currentIntent.unsignedXdr ?? '', env.networkPassphrase)
+      );
+      setState('confirm');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Payment could not be prepared.');
+      setState('error');
+    }
+  }, [authState.sessionToken, intent, lastRequest, publicKey]);
+
+  // Step 2: the payer has seen the summary; authorize, sign and submit exactly that envelope.
+  const handleApprove = useCallback(async () => {
+    if (!intent || !summary || !publicKey || !authState.sessionToken) {
+      setError(MISSING_ACCOUNT_MESSAGE);
+      setState('error');
+      return;
+    }
+
+    setState('processing');
+    setError(null);
+    try {
+      let currentIntent = intent;
+      // Fail fast before prompting for a passkey if the envelope drifted or already expired.
+      assertSigningMatchesSummary(summary, currentIntent.unsignedXdr ?? '', env.networkPassphrase);
 
       if (currentIntent.status === 'CREATED') {
         if (currentIntent.asset === 'USDC') {
@@ -129,6 +174,8 @@ export const SendHomeView = () => {
       if (currentIntent.status !== 'AUTHORIZED') {
         throw new Error(`Payment intent is ${currentIntent.status} and cannot be submitted.`);
       }
+      // Passkey prompts can take a while; re-check expiry right before the key is used.
+      assertSigningMatchesSummary(summary, currentIntent.unsignedXdr ?? '', env.networkPassphrase);
       const signedXdr = await AccountService.signPaymentTransaction(
         currentIntent.unsignedXdr ?? ''
       );
@@ -147,7 +194,7 @@ export const SendHomeView = () => {
       setError(cause instanceof Error ? cause.message : 'Payment could not be completed.');
       setState('error');
     }
-  }, [authState.sessionToken, intent, lastRequest, publicKey]);
+  }, [authState.sessionToken, intent, publicKey, summary]);
 
   const handleCancel = useCallback(async () => {
     await cancel();
@@ -158,7 +205,7 @@ export const SendHomeView = () => {
     <Screen scrollable>
       <ThemedText type="subtitle">Send</ThemedText>
       <ThemedText themeColor="textSecondary">
-        Scan a Vela payment request, review the destination, and approve the Stellar testnet
+        Scan a Vela payment request, review the transaction summary, and approve the Stellar testnet
         payment.
       </ThemedText>
 
@@ -177,9 +224,13 @@ export const SendHomeView = () => {
       )}
 
       {lastRequest &&
-        (state === 'review' || state === 'processing' || (state === 'error' && intent)) && (
+        (state === 'review' ||
+          state === 'preparing' ||
+          state === 'confirm' ||
+          state === 'processing' ||
+          (state === 'error' && intent)) && (
           <View style={styles.panel}>
-            <ThemedText type="smallBold">Review payment</ThemedText>
+            <ThemedText type="smallBold">Payment request</ThemedText>
             <ThemedText>
               {lastRequest.amount} {lastRequest.asset}
             </ThemedText>
@@ -189,6 +240,7 @@ export const SendHomeView = () => {
             {lastRequest.memo ? (
               <ThemedText themeColor="textSecondary">Memo: {lastRequest.memo}</ThemedText>
             ) : null}
+            {summary ? <TransactionSummaryCard summary={summary} /> : null}
             {intent?.status === 'FAILED' ? (
               <>
                 <ThemedText themeColor="error">
@@ -196,18 +248,24 @@ export const SendHomeView = () => {
                 </ThemedText>
                 <Button label="Scan another request" onPress={handleScan} />
               </>
+            ) : summary ? (
+              <Button
+                label={intent?.status === 'AUTHORIZED' ? 'Retry submission' : 'Approve and sign'}
+                onPress={handleApprove}
+                loading={state === 'processing'}
+              />
             ) : (
               <Button
-                label={intent?.status === 'AUTHORIZED' ? 'Retry submission' : 'Approve and pay'}
-                onPress={handlePay}
-                loading={state === 'processing'}
+                label="Review transaction"
+                onPress={handleReview}
+                loading={state === 'preparing'}
               />
             )}
             <Button
               label="Cancel"
               variant="secondary"
               onPress={handleCancel}
-              disabled={state === 'processing'}
+              disabled={state === 'preparing' || state === 'processing'}
             />
           </View>
         )}

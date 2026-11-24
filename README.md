@@ -177,6 +177,7 @@ See [docs/adr-nfc-library.md](docs/adr-nfc-library.md) for platform constraints 
 - [Client MVP build plan](docs/build-plan-client-mvp.md)
 - [NFC library ADR](docs/adr-nfc-library.md)
 - [Receive payment flow (C12)](docs/receive-flow.md)
+- [Send payment flow: pre-signing summary](docs/send-flow.md)
 - [NFC runtime flow and troubleshooting](docs/nfc-flow.md)
 - [NFC device checklist](docs/nfc-device-checklist.md)
 - [Stellar history and interoperability](docs/history-interoperability.md)
