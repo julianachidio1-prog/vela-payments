@@ -45,7 +45,8 @@ polling).
 | `src/features/receive/views/ReceiveHomeView.tsx` | Amount entry, asset selector, kicks off `prepare()` (CLI-061) |
 | `src/features/receive/views/ReceiveListeningView.tsx` | Starts the NFC broadcast, shows countdown + NFC status (CLI-064) |
 | `src/features/receive/views/WaitingForPaymentView.tsx` | Waits for payment settlement, 60s timeout (CLI-066) |
-| `src/features/receive/views/ReceiveSuccessView.tsx` | Success summary, reset/home actions (CLI-067) |
+| `src/features/receive/services/receiveSuccessContext.ts` | Turns the completed request into the success screen's recipient context |
+| `src/features/receive/views/ReceiveSuccessView.tsx` | Success summary with recipient context, reset/home actions (CLI-067) |
 | `src/features/receive/views/ReceiveFailedView.tsx` | Error-specific messaging, retry/change-amount actions (CLI-068) |
 | `src/constants/analytics-events.ts` | Receive funnel event names + sanitized property shape (CLI-071) |
 | `src/app/receive/{listening,waiting,success,failed}.tsx` | Expo Router screens for each non-home view |
@@ -101,7 +102,35 @@ PII**. Amounts are bucketed via `amount_bucket`: `'<1' | '1-10' | '10-100' | '>1
 | any → `failed` (`confirmFailure(reason)`) | `RECEIVE_FAILED` | `amount_bucket`, `asset`, `reason` |
 | any → `cancelled` (`cancel()`) | `RECEIVE_CANCELLED` | `amount_bucket`, `asset` |
 
-## 6. Related docs
+## 6. Success screen context
+
+`ReceiveSuccessView` shows the amount plus the context of the request that was
+paid, built by `buildReceiveSuccessContext` from the orchestrator's
+`paymentRequest` and `txHash`:
+
+| Row | Source | Notes |
+| --- | --- | --- |
+| To | `paymentRequest.recipient` | Truncated to `GABCDE…UVWXYZ` on screen; the full key is the row's accessibility label and the text is selectable. Hidden if the key fails the StrKey checksum. |
+| Network | `env.stellarNetwork` | `Stellar Testnet` or `Stellar Mainnet`. Vela only targets testnet today. |
+| Memo | `paymentRequest.memo` | Only when present and non-blank. |
+| Request | `paymentRequest.requestId` | Server request reference; only when present. |
+| Transaction | `txHash` | Truncated; "View on Stellar Expert" opens the full hash. Only when the server reported one. |
+
+The screen keeps the last context it rendered for as long as it is mounted, so
+pressing "Receive Another" (which resets the orchestrator before the router
+replaces the screen) does not blank the summary mid-transition. If the screen
+is reached with no completed request (for example, the route is opened
+directly after a reset) it says "Payment details are no longer available on
+this device." instead of rendering an empty card.
+
+Everything shown is data the receiver already broadcast over NFC; no secrets,
+signed payloads or session tokens reach this view. The context is held in
+memory only — it is not persisted and is lost if the app restarts. The values
+come from the request the receiver built; the client does not independently
+re-read the transaction from Horizon on this screen, so use the explorer link
+to verify the on-chain payment.
+
+## 7. Related docs
 
 - [NFC library ADR](adr-nfc-library.md) — payload size/encoding constraints the
   payment request payload must respect.
